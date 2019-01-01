@@ -9,7 +9,7 @@ palette = {
 def add_color(r, g, b):
     """ add color to palette (should use max 256 colors) """
     idx = palette['size']
-    assert(idx < 256)
+    assert idx < 256
     palette['size'] += 1
     palette['colors'][idx] = (r, g, b)
     return idx
@@ -123,12 +123,12 @@ def rasterize_line(p0, p1):
 
     da = a1 - a0
     db = b1 - b0
-        
+
     i = 1
     if db < 0:
         i = -1
         db = -db
-    D = 2*db - da  
+    D = 2*db - da
     b = b0
 
     for a in range(a0, a1+1):
@@ -139,7 +139,7 @@ def rasterize_line(p0, p1):
         if D > 0:
             b = b + i
             D = D - 2*da
-        D = D + 2*db    
+        D = D + 2*db
 
 """
 Homogeneous coordinates:
@@ -157,21 +157,21 @@ object-space:
 
 - model matrix "places" object in world
 
-world-space:                                               y            
+world-space:                                               y
 - location/size relative to other models                +? ^  z
 - units arbitrary, but i guess theres precision            | / +?
-  loss w/ very big/small numbers                           |/           
-                                                     <-----+-----> x                
+  loss w/ very big/small numbers                           |/
+                                                     <-----+-----> x
 - view matrix moves world in front of camera        -?     |    +?
                                                            |
 camera-space:                                           -? v
-- aka view/eye-space                                 
-- camera is at (0:0:0)                                               
+- aka view/eye-space
+- camera is at (0:0:0)
 
 - projection matrix adds perspective and
   normalizes coords to +/-1 (NDC)
 
-                                                             
+
 clip-space:                                                y
 - left handed coord system, half cube                   +1 ^  z
 - anything outside +/-1 doesn't get rendered               | / +1
@@ -215,7 +215,7 @@ framebuffer:                                         +-----------> x
 - fully 2D                                           |          +W
 - rasterize from here                                |
 - by now all points should be integral            +H v
-                                                     y         
+                                                     y
 """
 
 """
@@ -257,7 +257,7 @@ def tan(r):
 
 def ident(n):
     """ identity matrix """
-    assert(n == 4) # :)
+    assert n == 4  # :)
     return (
         (1, 0, 0, 0),
         (0, 1, 0, 0),
@@ -312,8 +312,8 @@ def trans(X, Y, Z):
 
 def dot_prod(vec1, vec2):
     stats['dot_prods'] += 1
-    assert(len(vec1) == 4)
-    assert(len(vec2) == 4)
+    assert len(vec1) == 4
+    assert len(vec2) == 4
     return sum(v1 * v2 for (v1, v2) in zip(vec1, vec2))
 
 
@@ -338,8 +338,8 @@ def mult_mv(mat, vec):
     """ (matNN x vecN) -> vecN """
     stats['mat_vec_mults'] += 1
     # we should only be doing N=4 mults
-    assert(len(vec) == 4)
-    assert(len(mat) == 4) # num rows
+    assert len(vec) == 4
+    assert len(mat) == 4 # num rows
     return [dot_prod(vec, mat[y]) for y in range(len(mat))]
 
 def mmult(*matrices):
@@ -362,14 +362,15 @@ def _mult_mm(m1, m2):
     # print(f"  {m1}")
     # print(f"x {m2}")
 
+    assert len(m1) == len(m2[0]) # m1 row and m2 col dimensions should match
     n = len(m1[0])
     m = len(m1)
-    assert(m == len(m2[0]))
     p = len(m2)
-    assert(n == 4)
-    assert(m == 4)
-    assert(p == 4)
 
+    # everything should be 4x4 for now
+    assert n == 4 and m == 4 and p == 4
+
+    # TODO: this is gross, should prob just use numpy
     rows = []
     for y in range(p):
         row = []
@@ -378,7 +379,7 @@ def _mult_mm(m1, m2):
             row.append(dot_prod(m1[y], col))
         rows.append(row)
     # print(f"= {rows}")
-    
+
     return rows
 
 PI = math.pi
@@ -401,15 +402,77 @@ def to_screen(vec4, screen):
     x, y = int((x+1)/2*screen.W), int((-y+1)/2*screen.H)    # scale to screen
     return x, y
 
+
+# primitive assembly constants
+LINE_LIST    = 0
+LINE_STRIP   = 1
+PRIM_RESTART = 0xFF
+def prim_assemble(vert_buf, elem_buf):
+    """
+    assemble vertex and element buffers into list of primitives (just lines for now)
+    vert_buf = [ color, x, y, z | color, x, y, z |  ... ]
+    elem_buf = [ topology | bunch of vertex indices ... ]
+
+    topology: how to interpret the element buffer
+              (see https://vulkan.lunarg.com/doc/view/1.0.33.0/linux/vkspec.chunked/ch19s01.html)
+
+    """
+    lines = []
+    def add_line(v0_idx, v1_idx):
+        # multiply by 4 cause one vertex is 4 entries in vert_buf
+        v0 = vert_buf[v0_idx*4:v0_idx*4 + 4]
+        v1 = vert_buf[v1_idx*4:v1_idx*4 + 4]
+
+        c  = v0[0]  # just use the color from the first vert for now. TODO: idk
+        p0 = (v0[1], v0[2], v0[3])
+        p1 = (v1[1], v1[2], v1[3])
+        line = c, (p0, p1)
+        lines.append(line)
+
+    i = 0
+    topo = elem_buf[i]
+    i += 1
+    if topo == LINE_LIST:
+        # elem_buf = [ LINE_LIST | v0, v1 | v0, v1 | ... ]
+        while i < len(elem_buf):
+            v0_idx = elem_buf[i]
+            v1_idx = elem_buf[i+1]
+            i += 2
+            add_line(v0_idx, v1_idx)
+
+    elif topo == LINE_STRIP:
+        # use the previous line's v1 as the next line's v0
+        # elem_buf = [ LINE_STRIP | v0, v1 | v1 | ... | PRIM_RESTART | v0, v1 | v1 | ... ]
+        while i < len(elem_buf):
+            v0_idx = elem_buf[i]
+            v1_idx = elem_buf[i+1]
+            i += 2
+            add_line(v0_idx, v1_idx)
+
+            while i < len(elem_buf):
+                if elem_buf[i] == PRIM_RESTART:
+                    i += 1
+                    break
+                v0_idx = v1_idx
+                v1_idx = elem_buf[i]
+                i += 1
+                add_line(v0_idx, v1_idx)
+    else:
+        assert False, f"invalid primitive topology: {topo}"
+
+    return lines
+
+
 def render(screen, objects, PV):
     """ object order rendering "pipeline" """
     stats['frames'] += 1
     for obj in objects:
         PVM = mmult(PV, obj.M)
-        for line in obj.lines:
-            # "primitive assembly"
-            c, (v0, v1) = line
-            points = [obj.points[v0], obj.points[v1]]
+
+        # "primitive assembly"
+        lines = prim_assemble(obj.vert_buf, obj.elem_buf)
+        for line in lines:
+            c, points = line
 
             # "vertex shader"
             points = [to_homog(p) for p in points]          # convert to homog before transforms

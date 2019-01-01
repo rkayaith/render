@@ -68,11 +68,11 @@ output_args.add_argument(
 args = parser.parse_args()
 
 
-fname = f"out/{args.scene}.gif"
+fname = f"_out/{args.scene}.gif"
 screen = gfx.Screen(W=args.width, H=args.height, fps=50) # higher than 50 breaks the gifs
 error = not run(args, fname, screen)
 if error:
-    fname = "out/error.gif"
+    fname = "_out/error.gif"
     screen.to_gif(fname, args.time_scale, loop=1)
 else:
     screen.to_gif(fname, args.time_scale)
