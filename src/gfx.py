@@ -173,7 +173,7 @@ camera-space:                                           -? v
 
 
 clip-space:                                                y
-- left handed coord system, half cube                   +1 ^  z
+- left handed coord system, full cube                   +1 ^  z
 - anything outside +/-1 doesn't get rendered               | / +1
 - viewport transform shifts/scales coords                  |/
   to the dimensions of the actual screen             <-----+-----> x
@@ -190,31 +190,67 @@ screen-space:                                           z
                                                   +H v
                                                      y
 """
-def proj(screen, zfar, znear, fov):
-    """ projection matrix to go from screenspace (3D) -> framebuffer (2D) """
+def proj(screen, fov, znear, zfar):
+    """
+    Projective transformation
+    - Transforms coords into clip-space
+    - The resulting coords need to be homogenized (divide x, y, z by w value)
+    """
+
+    """
+    Basic idea:
+        - put a plane a set distance away from camera
+        - draw lines between points and the origin (camera)
+        - projection of point is intersection of it's line and the projection
+          plane
+    we could do this with a simple matrix like
+        | 1 0 0 0 |
+        | 0 1 0 0 |
+        | 0 0 1 1 |
+        | 0 0 1 0 |
+    which projects onto the plane z=1, transforming
+        (x, y, z, 1) -> (  x,   y,   z+1, z)
+                     == (x/z, y/z, 1+1/z, 1) after homogenization
+    but we also want to transform all coordinates into clip-space at the same
+    time, which makes this whole mess
+    """
+
+    """
+    map y values within vert fov to [-1, 1] by placing projection plane at z=cot
+    x values need to be scaled by aspect ratio to account for non-square screens
+    """
+    cot = 1 / tan(rad(fov/2))  # this is from some basic trig
     asp = screen.W / screen.H
-    t   = tan(rad(fov/2))
-    z   = zfar/(zfar-znear)
-    return (
-        (1/(asp*t),   0,       0, 0),
-        (        0, 1/t,       0, 0),
-        (        0,   0,       z, 1),
-        (        0,   0, z*znear, 0),
-    )
+
+    y = cot
+    x = cot / asp
+
     """
-    zd = zfar-znear
-    return (
-        (1/(asp*t), 0,                 0,                0),
-        (        0, t,                 0,                0),
-        (        0, 0,  -(zfar+znear)/zd, -2*zfar*znear/zd),
-        (        0, 0,                -1,                0),
-    )
+    scale z values from range [n, f] -> [-1, 1]
+    a, b, c, d are from solving the system:
+        P(z) = (az + b) / (cz + d), P(n) = -1, P(f) = 1
+    NOTE: this matrix is for NDC where camera looks down +z axis
+          for looking down -z axis flip the sign of a and c
+    TODO: is mapping [n, f] -> [0, 1] (a half cube) any better?
+    TODO: is setting n=0 any better? does it even work?
     """
+    n, f = znear, zfar
+
+    a, b = (f+n) / (f-n), (-2*f*n) / (f-n)
+    c, d =             1,                0
+
+    return (
+        (x, 0, 0, 0),
+        (0, y, 0, 0),
+        (0, 0, a, b),
+        (0, 0, c, d),
+    )
+
 """
 framebuffer:                                         +-----------> x
 - fully 2D                                           |          +W
 - rasterize from here                                |
-- by now all points should be integral            +H v
+- by now all points should be ints                +H v
                                                      y
 """
 
@@ -340,7 +376,7 @@ def mult_mv(mat, vec):
     # we should only be doing N=4 mults
     assert len(vec) == 4
     assert len(mat) == 4 # num rows
-    return [dot_prod(vec, mat[y]) for y in range(len(mat))]
+    return [dot_prod(vec, row) for row in mat]
 
 def mmult(*matrices):
     """
@@ -352,6 +388,7 @@ def mmult(*matrices):
     for m in reversed(ms):
         M = _mult_mm(m, M)
     return M
+
 def _mult_mm(m1, m2):
     """
     matrix-matrix multiplication
@@ -394,11 +431,8 @@ def to_homog(vec3):
 def to_screen(vec4, screen):
     """ homog coord -> 2D screen-space """
     x, y, z, w = vec4                                       # throw away z coord
-    # assert(w != 0)
-    if w == 0:  # TODO: idk why this is 0 sometimes
-        w = 1
-    x, y = x/w, y/w                                         # homog -> cart
-    x, y = x/z, y/z                                         # perspective division
+    assert(w != 0)
+    x, y = x/w, y/w                                         # normalize homog coord
     x, y = int((x+1)/2*screen.W), int((-y+1)/2*screen.H)    # scale to screen
     return x, y
 
@@ -415,7 +449,6 @@ def prim_assemble(vert_buf, elem_buf):
 
     topology: how to interpret the element buffer
               (see https://vulkan.lunarg.com/doc/view/1.0.33.0/linux/vkspec.chunked/ch19s01.html)
-
     """
     lines = []
     def add_line(v0_idx, v1_idx):
@@ -477,7 +510,8 @@ def render(screen, objects, PV):
             # "vertex shader"
             points = [to_homog(p) for p in points]          # convert to homog before transforms
             points = [mult_mv(PVM, p) for p in points]      # model -> world -> camera -> clip
-            points = [to_screen(p, screen) for p in points] # clip  -> screen
+            # TODO: perform clipping
+            points = [to_screen(p, screen) for p in points] # clip  -> screen  TODO: use matrix?
 
             # rasterization
             for p in rasterize_line(*points):
