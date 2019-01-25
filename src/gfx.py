@@ -431,8 +431,8 @@ def to_homog(vec3):
 def to_screen(vec4, screen):
     """ homog coord -> 2D screen-space """
     x, y, z, w = vec4                                       # throw away z coord
-    assert(w != 0)
-    x, y = x/w, y/w                                         # normalize homog coord
+    assert w != 0
+    x, y, z, w = x/w, y/w, z/w, w/w                         # normalize homog coord
     x, y = int((x+1)/2*screen.W), int((-y+1)/2*screen.H)    # scale to screen
     return x, y
 
